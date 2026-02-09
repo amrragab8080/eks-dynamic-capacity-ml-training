@@ -21,7 +21,7 @@ spec:
         - name: JOB_NAME
           value: "pytorch-training-small"
         - name: MAX_NODES
-          value: "128"
+          value: "4"
         - name: GPUS_PER_NODE
           value: "4"
         - name: WAIT_TIMEOUT
