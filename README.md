@@ -77,11 +77,42 @@ kubectl apply -f manifests/training-launcher-large.yaml
 
 ## Configuration
 
+### Terraform Configuration
+
 Edit `terraform.tfvars`:
 ```hcl
 cluster_name = "pytorch-training-cluster"
 region       = "us-west-2"
 ```
+
+### Launcher Configuration
+
+Before submitting training jobs, configure these key parameters in the launcher manifests (`manifests/training-launcher-small.yaml` or `manifests/training-launcher-large.yaml`):
+
+- **MIN_NODES**: Minimum number of GPU nodes required to start training (default: 2 for small, 1 for large)
+  - Training will fail if fewer nodes are available after timeout
+  - Set based on your minimum viable training configuration
+
+- **MAX_NODES**: Maximum number of GPU nodes to request (default: 128)
+  - Launcher will wait for up to this many nodes to provision
+  - Training adapts to actual nodes provisioned (between MIN and MAX)
+
+- **WAIT_TIMEOUT**: Maximum time in seconds to wait for nodes (default: 120s for small, 600s for large)
+  - If MIN_NODES are available before timeout, training starts with available nodes
+  - If MIN_NODES not available after timeout, job fails
+
+Example configuration:
+```yaml
+env:
+- name: MIN_NODES
+  value: "2"
+- name: MAX_NODES
+  value: "8"
+- name: WAIT_TIMEOUT
+  value: "300"
+```
+
+This configuration will wait up to 5 minutes for 2-8 nodes, then start training with whatever is available (minimum 2).
 
 ## How It Works
 
