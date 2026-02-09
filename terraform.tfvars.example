@@ -1,0 +1,4 @@
+# Copy this file to terraform.tfvars and customize the values
+
+cluster_name = "pytorch-training-cluster"
+region       = "us-west-2"

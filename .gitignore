@@ -1,0 +1,27 @@
+.DS_Store
+*.pyc
+__pycache__/
+.venv/
+venv/
+*.swp
+*.swo
+*~
+.kube/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfstate.*.backup
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.backup
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraform example file (commit this)
+!terraform.tfvars.example

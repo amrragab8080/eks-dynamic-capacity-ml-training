@@ -1,0 +1,184 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: training-launcher-large
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      serviceAccountName: training-launcher
+      restartPolicy: Never
+      tolerations:
+      - key: training-size
+        value: small
+        effect: NoSchedule
+      containers:
+      - name: launcher
+        image: bitnami/kubectl:latest
+        env:
+        - name: TRAINING_IMAGE
+          value: "010438491516.dkr.ecr.us-west-2.amazonaws.com/pytorchddp/basic:latest"
+        - name: JOB_NAME
+          value: "pytorch-training-large"
+        - name: MAX_NODES
+          value: "128"
+        - name: GPUS_PER_NODE
+          value: "4"
+        - name: WAIT_TIMEOUT
+          value: "600"  # 10 minutes total wait time
+        - name: MIN_NODES
+          value: "1"    # Minimum nodes to proceed
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          
+          echo "Creating placeholder pods to trigger Karpenter (max $MAX_NODES nodes)..."
+          
+          # Create placeholder deployment
+          cat <<EOF | kubectl apply -n gpu-provisioning -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: gpu-placeholder-large
+          spec:
+            replicas: $MAX_NODES
+            selector:
+              matchLabels:
+                app: gpu-placeholder-large
+            template:
+              metadata:
+                labels:
+                  app: gpu-placeholder-large
+              spec:
+                tolerations:
+                - key: nvidia.com/gpu
+                  effect: NoSchedule
+                - key: training-size
+                  value: small
+                  effect: NoSchedule
+                affinity:
+                  podAntiAffinity:
+                    requiredDuringSchedulingIgnoredDuringExecution:
+                    - labelSelector:
+                        matchLabels:
+                          app: gpu-placeholder-large
+                      topologyKey: kubernetes.io/hostname
+                containers:
+                - name: placeholder
+                  image: public.ecr.aws/eks-distro/kubernetes/pause:3.2
+                  resources:
+                    requests:
+                      nvidia.com/gpu: 1
+                    limits:
+                      nvidia.com/gpu: 1
+          EOF
+          
+          echo "Waiting for GPU nodes to provision (timeout: ${WAIT_TIMEOUT}s)..."
+          
+          START_TIME=$(date +%s)
+          POLL_INTERVAL=30
+          
+          # Poll for GPU nodes with timeout
+          while true; do
+            CURRENT_TIME=$(date +%s)
+            ELAPSED=$((CURRENT_TIME - START_TIME))
+            
+            GPU_NODES=$(kubectl get nodes -o json | \
+              jq '[.items[] | 
+                select(.status.conditions[] | select(.type=="Ready" and .status=="True")) | 
+                select(.status.allocatable."nvidia.com/gpu" != null)] | length')
+            
+            echo "Found $GPU_NODES GPU nodes (elapsed: ${ELAPSED}s / ${WAIT_TIMEOUT}s)"
+            
+            # Check if we have enough nodes or reached max
+            if [ $GPU_NODES -ge $MAX_NODES ]; then
+              echo "Reached max nodes ($MAX_NODES)"
+              break
+            fi
+            
+            if [ $GPU_NODES -ge $MIN_NODES ] && [ $ELAPSED -ge $WAIT_TIMEOUT ]; then
+              echo "Timeout reached with $GPU_NODES nodes (min: $MIN_NODES)"
+              break
+            fi
+            
+            if [ $ELAPSED -ge $WAIT_TIMEOUT ]; then
+              if [ $GPU_NODES -lt $MIN_NODES ]; then
+                echo "ERROR: Timeout reached with only $GPU_NODES nodes (need at least $MIN_NODES)"
+                kubectl delete deployment gpu-placeholder-large -n gpu-provisioning
+                exit 1
+              fi
+              break
+            fi
+            
+            sleep $POLL_INTERVAL
+          done
+          
+          TOTAL_GPUS=$(($GPU_NODES * $GPUS_PER_NODE))
+          
+          echo "Deleting placeholder pods..."
+          kubectl delete deployment gpu-placeholder-large -n gpu-provisioning
+          
+          echo "Waiting for placeholders to terminate..."
+          sleep 10
+          
+          WORKER_REPLICAS=$GPU_NODES
+          
+          echo "Submitting PyTorchJob with 1 master (CPU) + $GPU_NODES workers (GPU) = $TOTAL_GPUS GPUs"
+          
+          cat <<EOF | kubectl apply -f -
+          apiVersion: kubeflow.org/v1
+          kind: PyTorchJob
+          metadata:
+            name: $JOB_NAME
+          spec:
+            pytorchReplicaSpecs:
+              Master:
+                replicas: 1
+                restartPolicy: OnFailure
+                template:
+                  spec:
+                    tolerations:
+                    - key: nvidia.com/gpu
+                      effect: NoSchedule
+                    - key: training-size
+                      value: large
+                      effect: NoSchedule
+                    containers:
+                    - name: pytorch
+                      image: $TRAINING_IMAGE
+                      imagePullPolicy: Always
+                      env:
+                      - name: WORLD_SIZE
+                        value: "$TOTAL_GPUS"
+                      - name: NCCL_DEBUG
+                        value: "INFO"
+              Worker:
+                replicas: $WORKER_REPLICAS
+                restartPolicy: OnFailure
+                template:
+                  spec:
+                    tolerations:
+                    - key: nvidia.com/gpu
+                      effect: NoSchedule
+                    - key: training-size
+                      value: small
+                      effect: NoSchedule
+                    containers:
+                    - name: pytorch
+                      image: $TRAINING_IMAGE
+                      imagePullPolicy: Always
+                      env:
+                      - name: WORLD_SIZE
+                        value: "$TOTAL_GPUS"
+                      - name: NCCL_DEBUG
+                        value: "INFO"
+                      resources:
+                        limits:
+                          nvidia.com/gpu: $GPUS_PER_NODE
+                        requests:
+                          nvidia.com/gpu: $GPUS_PER_NODE
+          EOF
+          
+          echo "PyTorchJob submitted successfully: 1 master + $GPU_NODES workers"
