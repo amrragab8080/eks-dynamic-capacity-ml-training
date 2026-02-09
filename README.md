@@ -32,12 +32,22 @@ terraform apply
 # 4. Configure kubectl
 aws eks update-kubeconfig --name pytorch-training-cluster --region us-west-2
 
-# 5. Build and push training image
+# 5. Create ECR repository and build training image
+aws ecr create-repository --repository-name pytorch-training --region us-west-2
+aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-west-2.amazonaws.com
+
 cd training-image
-./build.sh
+docker build -t pytorch-training .
+docker tag pytorch-training:latest <account-id>.dkr.ecr.us-west-2.amazonaws.com/pytorch-training:latest
+docker push <account-id>.dkr.ecr.us-west-2.amazonaws.com/pytorch-training:latest
 cd ..
 
-# 6. Submit training job
+# 6. Configure launcher parameters
+# Edit manifests/training-launcher-small.yaml or training-launcher-large.yaml
+# Set MIN_NODES and MAX_NODES environment variables to control node provisioning range
+# Example: MIN_NODES=2, MAX_NODES=4 will wait for 2-4 nodes and adapt training accordingly
+
+# 7. Submit training job
 kubectl apply -f manifests/training-launcher-small.yaml
 # or
 kubectl apply -f manifests/training-launcher-large.yaml

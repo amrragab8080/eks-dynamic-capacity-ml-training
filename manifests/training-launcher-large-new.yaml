@@ -17,7 +17,7 @@ spec:
         image: bitnami/kubectl:latest
         env:
         - name: TRAINING_IMAGE
-          value: "010438491516.dkr.ecr.us-west-2.amazonaws.com/pytorchddp/basic:latest"
+          value: "<account-id>.dkr.ecr.us-west-2.amazonaws.com/pytorch-training:latest"
         - name: JOB_NAME
           value: "pytorch-training-large"
         - name: MAX_NODES
